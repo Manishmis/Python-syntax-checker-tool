@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""
+Python Syntax Checker Tool
+A comprehensive utility to validate Python syntax without execution.
+Designed for educators, students, and beginner programmers.
+"""
+
+import sys
+import os
+import argparse
+import glob
+from pathlib import Path
+
+try:
+    from colorama import Fore, Style, init
+    COLORAMA_AVAILABLE = True
+except ImportError:
+    COLORAMA_AVAILABLE = False
+
+# Initialize colorama if available
+if COLORAMA_AVAILABLE:
+    init()
+
+class SyntaxChecker:
+    """Main class for the Python Syntax Checker Tool."""
+    
+    def __init__(self, verbose=False, no_color=False):
+        self.verbose = verbose
+        self.use_color = COLORAMA_AVAILABLE and not no_color
+        self.checked_files = 0
+        self.error_files = 0
+        
+    def colorize(self, text, color):
+        """Apply color to text if color is enabled."""
+        if self.use_color:
+            return f"{color}{text}{Style.RESET_ALL}"
+        return text
+    
+    def print_verbose(self, message):
+        """Print message only in verbose mode."""
+        if self.verbose:
+            print(message)
+    
+    def check_file(self, file_path):
+        """
+        Check the syntax of a single Python file.
+        
+        Args:
+            file_path (str): Path to the Python file to check
+            
+        Returns:
+            tuple: (success, message) where success is boolean and message is string
+        """
+        self.checked_files += 1
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return False, f"Error: The file '{file_path}' was not found."
+        
+        # Check if it's a file (not directory)
+        if not os.path.isfile(file_path):
+            return False, f"Error: '{file_path}' is not a file."
+        
+        # Check file size (warn if > 1MB)
+        file_size = os.path.getsize(file_path)
+        if file_size > 1024 * 1024:  # 1MB
+            self.print_verbose(f"Warning: File '{file_path}' is large ({file_size/1024/1024:.2f} MB).")
+        
+        try:
+            # Read file with explicit encoding handling
+            with open(file_path, 'r', encoding='utf-8') as file:
+                source_code = file.read()
+        except UnicodeDecodeError:
+            # Try with different encoding if UTF-8 fails
+            try:
+                with open(file_path, 'r', encoding='latin-1') as file:
+                    source_code = file.read()
+            except Exception as e:
+                return False, f"Error reading file '{file_path}': {e}"
+        except IOError as e:
+            return False, f"Error reading file '{file_path}': {e}"
+        
+        # Validate syntax
+        try:
+            compile(source_code, file_path, 'exec')
+            return True, "No syntax errors found."
+        except SyntaxError as e:
+            self.error_files += 1
+            # Provide helpful hints for common errors
+            error_msg = f"Syntax error at line {e.lineno or 'unknown'}: {e.msg}"
+            
+            # Add hints for common errors
+            hints = {
+                "unexpected EOF while parsing": "This often means missing closing parenthesis, bracket, or brace.",
+                "invalid syntax": "Check for typos or incorrect Python syntax.",
+                "EOL while scanning string literal": "You might have an unclosed string.",
+                "expected an indented block": "This often means a colon without indented code.",
+            }
+            
+            for key, hint in hints.items():
+                if key in e.msg:
+                    error_msg += f"\nHint: {hint}"
+                    break
+                    
+            return False, error_msg
+        except Exception as e:
+            return False, f"Unexpected error during compilation: {e}"
+    
+    def check_path(self, path_pattern, recursive=False):
+        """
+        Check all Python files matching a path pattern.
+        
+        Args:
+            path_pattern (str): File path, directory, or pattern with wildcards
+            recursive (bool): Whether to search subdirectories recursively
+            
+        Returns:
+            list: Results for each file checked
+        """
+        results = []
+        
+        # Expand the pattern to find all matching files
+        if recursive and os.path.isdir(path_pattern):
+            # Recursive directory search
+            pattern = os.path.join(path_pattern, "**", "*.py")
+            files = glob.glob(pattern, recursive=True)
+        else:
+            # Standard glob pattern matching
+            files = glob.glob(path_pattern, recursive=recursive)
+        
+        if not files:
+            print(f"No Python files found matching: {path_pattern}")
+            return results
+        
+        self.print_verbose(f"Found {len(files)} Python file(s) to check.")
+        
+        # Check each file
+        for file_path in files:
+            if os.path.isfile(file_path):
+                success, message = self.check_file(file_path)
+                results.append((file_path, success, message))
+        
+        return results
+    
+    def print_results(self, results, output_file=None):
+        """Print or save the results of syntax checking."""
+        output_lines = []
+        
+        for file_path, success, message in results:
+            if success:
+                status = self.colorize("✓ PASS", Fore.GREEN)
+            else:
+                status = self.colorize("✗ FAIL", Fore.RED)
+            
+            result_line = f"{status} {file_path}: {message}"
+            output_lines.append(result_line)
+            print(result_line)
+        
+        # Print summary
+        summary = f"\nChecked {self.checked_files} file(s). Found errors in {self.error_files} file(s)."
+        output_lines.append(summary)
+        
+        if self.error_files == 0:
+            print(self.colorize(summary, Fore.GREEN))
+        else:
+            print(self.colorize(summary, Fore.RED))
+        
+        # Write to output file if specified
+        if output_file:
+            try:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(output_lines))
+                print(f"Results saved to: {output_file}")
+            except IOError as e:
+                print(f"Error writing to output file: {e}")
+    
+    def run_checks(self, paths, recursive=False, output_file=None):
+        """Main method to run all checks."""
+        all_results = []
+        
+        for path in paths:
+            self.print_verbose(f"Checking: {path}")
+            results = self.check_path(path, recursive)
+            all_results.extend(results)
+        
+        self.print_results(all_results, output_file)
+        
+        # Return appropriate exit code
+        return 0 if self.error_files == 0 else 1
+
+
+def main():
+    """Main function to run the syntax checker."""
+    parser = argparse.ArgumentParser(
+        description="Python Syntax Checker Tool - Validate Python code without execution",
+        epilog="Example: python_syntax_checker.py script.py /path/to/files/*.py --recursive --verbose"
+    )
+    
+    parser.add_argument(
+        'paths',
+        nargs='+',
+        help='Python files, directories, or patterns to check (e.g., script.py, /path/to/files/*.py)'
+    )
+    
+    parser.add_argument(
+        '-r', '--recursive',
+        action='store_true',
+        help='Search for Python files recursively in directories'
+    )
+    
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    
+    parser.add_argument(
+        '-o', '--output',
+        metavar='FILE',
+        help='Save results to the specified file'
+    )
+    
+    parser.add_argument(
+        '--no-color',
+        action='store_true',
+        help='Disable colored output'
+    )
+    
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='Python Syntax Checker 1.0'
+    )
+    
+    args = parser.parse_args()
+    
+    # Create checker instance
+    checker = SyntaxChecker(verbose=args.verbose, no_color=args.no_color)
+    
+    # Print welcome message
+    print("Python Syntax Checker Tool")
+    print("==========================")
+    
+    # Run checks
+    exit_code = checker.run_checks(
+        paths=args.paths,
+        recursive=args.recursive,
+        output_file=args.output
+    )
+    
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
